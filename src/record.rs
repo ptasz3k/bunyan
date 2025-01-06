@@ -1,6 +1,6 @@
 use crate::{Format, NamedLogLevel};
-use chrono::{DateTime, SecondsFormat, Utc};
-use colored::Colorize;
+use chrono::{DateTime, Local, SecondsFormat, Utc};
+use colored::{Colorize, CustomColor};
 use itertools::Itertools;
 use serde::Serialize;
 use serde_json::ser::PrettyFormatter;
@@ -10,22 +10,22 @@ use std::convert::TryFrom;
 
 #[derive(serde::Deserialize)]
 pub struct LogRecord<'a> {
-    /// This is the bunyan log format version. The log version is a single integer.
+    /// This is the bunyan log format version. The log version is a single integer0
     /// It is meant to be 0 until version "1.0.0" of `node-bunyan` is released.
     /// Thereafter, starting with 1, this will be incremented if there is any backward incompatible
+    pub v: Option<u8>,
     /// change to the log record format.
-    #[serde(rename = "v")]
-    pub version: u8,
     /// See `LogLevel`
     pub level: u8,
-    /// Name of the service/application emitting logs in bunyan format.
-    pub name: &'a str,
-    /// Name of the operating system host.
-    pub hostname: &'a str,
-    /// Process identifier.
-    #[serde(rename = "pid")]
-    pub process_identifier: u32,
+    /// The name of the logger that produced the log record.
+    pub name: Option<&'a str>,
+    /// The hostname of the machine that produced the log record.
+    pub hostname: Option<&'a str>,
+    /// The pid of the process that produced the log record.
+    pub pid: Option<u32>,
     /// The time of the event captured by the log in [ISO 8601 extended format](http://en.wikipedia.org/wiki/ISO_8601).
+    /// is8601 for bunyan, timestamp for pino
+    #[serde(with = "iso8601_or_timestamp")]
     pub time: DateTime<Utc>,
     /// Log message.
     #[serde(rename = "msg")]
@@ -35,16 +35,20 @@ pub struct LogRecord<'a> {
     pub extras: serde_json::Map<String, serde_json::Value>,
 }
 
-impl<'a> LogRecord<'a> {
+fn gray() -> CustomColor {
+    CustomColor::new(128, 128, 128)
+}
+
+impl LogRecord<'_> {
     pub fn format(&self, _format: Format) -> String {
         let level = format_level(self.level);
         let formatted = format!(
-            "[{}] {}: {}/{} on {}: {}{}",
-            self.time.to_rfc3339_opts(SecondsFormat::Millis, true),
+            "[{}] {} ({}): {}{}",
+            self.time
+                .with_timezone(&Local)
+                .to_rfc3339_opts(SecondsFormat::Millis, true),
             level,
-            self.name,
-            self.process_identifier,
-            self.hostname,
+            self.pid.unwrap_or(0),
             self.message.cyan(),
             format_extras(&self.extras)
         );
@@ -58,10 +62,10 @@ pub fn format_level(level: u8) -> String {
             // Making sure all levels are 5 characters
             NamedLogLevel::Fatal => "FATAL".reversed(),
             NamedLogLevel::Error => "ERROR".red(),
-            NamedLogLevel::Warn => " WARN".magenta(),
-            NamedLogLevel::Info => " INFO".cyan(),
-            NamedLogLevel::Debug => "DEBUG".yellow(),
-            NamedLogLevel::Trace => "TRACE".white(),
+            NamedLogLevel::Warn => " WARN".yellow(),
+            NamedLogLevel::Info => " INFO".green(),
+            NamedLogLevel::Debug => "DEBUG".blue(),
+            NamedLogLevel::Trace => "TRACE".custom_color(gray()),
         }
         .to_string()
     } else {
@@ -124,4 +128,33 @@ fn json_to_indented_string(value: &serde_json::Value, indent: &str) -> String {
 
 pub fn indent(s: &str) -> String {
     format!("    {}", s.lines().join("\n    "))
+}
+
+mod iso8601_or_timestamp {
+    use chrono::{DateTime, TimeZone, Utc};
+    use serde::{self, Deserialize, Deserializer};
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        pub enum DateTimeOrTimestamp {
+            DateTime(DateTime<Utc>),
+            Timestamp(i64),
+        }
+
+        let value = DateTimeOrTimestamp::deserialize(deserializer)?;
+
+        match value {
+            DateTimeOrTimestamp::DateTime(s) => DateTime::parse_from_rfc3339(&s.to_rfc3339())
+                .map_err(serde::de::Error::custom)
+                .map(|dt| dt.with_timezone(&Utc)),
+            DateTimeOrTimestamp::Timestamp(i) => match Utc.timestamp_millis_opt(i) {
+                chrono::LocalResult::Single(ts) => Ok(ts),
+                _ => Err(serde::de::Error::custom("invalid date format")),
+            },
+        }
+    }
 }
