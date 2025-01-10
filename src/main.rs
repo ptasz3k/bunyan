@@ -30,6 +30,9 @@ struct Cli {
     /// are passed through.
     #[arg(long)]
     strict: bool,
+    /// Show timestamps in UTC.
+    #[arg(name = "utc", long = "show-utc")]
+    utc: bool,
 }
 
 fn main() {
@@ -43,5 +46,5 @@ fn main() {
         colored::control::set_override(true);
     }
 
-    process_stdin(cli.output, cli.level.0, cli.strict);
+    process_stdin(cli.output, cli.level.0, cli.strict, cli.utc);
 }

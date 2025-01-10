@@ -40,13 +40,18 @@ fn gray() -> CustomColor {
 }
 
 impl LogRecord<'_> {
-    pub fn format(&self, _format: Format) -> String {
+    pub fn format(&self, _format: Format, utc: bool) -> String {
         let level = format_level(self.level);
-        let formatted = format!(
-            "[{}] {} ({}): {}{}",
+        let rfc3339 = if utc {
+            self.time.to_rfc3339_opts(SecondsFormat::Millis, true)
+        } else {
             self.time
                 .with_timezone(&Local)
-                .to_rfc3339_opts(SecondsFormat::Millis, true),
+                .to_rfc3339_opts(SecondsFormat::Millis, true)
+        };
+        let formatted = format!(
+            "[{}] {} ({}): {}{}",
+            rfc3339,
             level,
             self.pid.unwrap_or(0),
             self.message.cyan(),
